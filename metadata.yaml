@@ -3,3 +3,4 @@ display_name: 网页限定搜索
 desc: 仅允许 Tavily 允许在允许的域名进行搜索
 version: v1.0.0
 author: https://github.com/eenn1301/astrbot_plugin_dst_only
+short_desc: 固定域名搜索

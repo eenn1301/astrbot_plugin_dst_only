@@ -3,13 +3,13 @@
     "description": "允许访问的域名白名单",
     "type": "list",
     "default": ["dontstarve.huijiwiki.com"],
-    "hint": "仅允许 Tavily 搜索此列表中的域名。每行一个域名，例如：dontstarve.huijiwiki.com"
+    "hint": "仅允许 Tavily 搜索此列表中的域名。点击下方按钮可添加或删除域名。"
   },
   "include_domains_mode": {
     "description": "域名过滤模式",
     "type": "string",
     "default": "restrict",
     "options": ["restrict", "prefer"],
-    "hint": "restrict: 严格限制，只返回白名单内的结果；prefer: 优先返回，但可能包含其他域名"
+    "hint": "restrict: 严格限制；prefer: 优先返回"
   }
 }

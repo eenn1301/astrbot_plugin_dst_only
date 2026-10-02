@@ -46,25 +46,21 @@ class DSTOnlyPlugin(Star):
 
         api_key = tavily_keys[0] if isinstance(tavily_keys, list) else tavily_keys
 
-        # 核心修改：使用 site: 语法强制限定域名
-        if allowed_domains:
-            site_query = " OR ".join([f"site:{d}" for d in allowed_domains])
-            query = f"{query} ({site_query})"
-            logger.info(f"[{PLUGIN_NAME}] 改写后的查询词: {query}")
-
         payload = {
             "api_key": api_key,
             "query": query,
             "max_results": max_results,
         }
 
-        # 仍然保留 include_domains 作为辅助（尽管它是软限制）
+        # 核心修改：当存在白名单域名时，强制启用硬过滤模式
         if allowed_domains:
             payload["include_domains"] = allowed_domains
+            # 关键参数：filter 模式会强制只返回白名单内的结果
+            payload["include_domains_mode"] = "filter"
 
         logger.info(
             f"[{PLUGIN_NAME}] Tavily 搜索: query='{query}', "
-            f"domains={allowed_domains}"
+            f"domains={allowed_domains}, mode=filter"
         )
 
         try:
@@ -92,16 +88,24 @@ class DSTOnlyPlugin(Star):
             yield event.plain_result(f"Tavily 请求出错: {str(e)}")
             return
 
-        # 格式化返回结果
+        # 获取结果并进行二次过滤
         results = data.get("results", [])
-        if not results:
+
+        # 二次过滤：确保结果只来自指定域名
+        filtered_results = [
+            r for r in results
+            if "dontstarve.huijiwiki.com" in r.get("url", "")
+        ]
+
+        if not filtered_results:
             yield event.plain_result(
                 f"未找到与「{query}」相关的结果（已限制域名: {allowed_domains}）。"
             )
             return
 
+        # 格式化输出
         lines = [f"🔍 搜索「{query}」的结果（仅限指定域名）：\n"]
-        for i, r in enumerate(results, 1):
+        for i, r in enumerate(filtered_results, 1):
             title = r.get("title", "无标题")
             url = r.get("url", "")
             snippet = r.get("snippet", "")

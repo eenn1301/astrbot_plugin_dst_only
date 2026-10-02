@@ -37,9 +37,8 @@ class DSTOnlyPlugin(Star):
             for d in self.config.get("allowed_domains", [])
             if d.strip()
         ]
-        include_mode = self.config.get("include_domains_mode", "restrict")
 
-        # 读取 Tavily API Key（从 AstrBot 全局配置中获取）
+        # 读取 Tavily API Key
         tavily_keys = self.config.get("websearch_tavily_key", [])
         if not tavily_keys:
             yield event.plain_result("未配置 Tavily API Key，无法执行搜索。")
@@ -47,22 +46,25 @@ class DSTOnlyPlugin(Star):
 
         api_key = tavily_keys[0] if isinstance(tavily_keys, list) else tavily_keys
 
-        # 构建请求体
+        # 核心修改：使用 site: 语法强制限定域名
+        if allowed_domains:
+            site_query = " OR ".join([f"site:{d}" for d in allowed_domains])
+            query = f"{query} ({site_query})"
+            logger.info(f"[{PLUGIN_NAME}] 改写后的查询词: {query}")
+
         payload = {
             "api_key": api_key,
             "query": query,
             "max_results": max_results,
         }
 
-        # 注入域名限制参数
+        # 仍然保留 include_domains 作为辅助（尽管它是软限制）
         if allowed_domains:
             payload["include_domains"] = allowed_domains
-            if include_mode == "restrict":
-                payload["include_domains_mode"] = "restrict"
 
         logger.info(
             f"[{PLUGIN_NAME}] Tavily 搜索: query='{query}', "
-            f"domains={allowed_domains}, mode={include_mode}"
+            f"domains={allowed_domains}"
         )
 
         try:

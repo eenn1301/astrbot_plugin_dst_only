@@ -1,5 +1,5 @@
 name: astrbot_plugin_dst_only
-display_name: 饥荒维基限定搜索
-desc: 仅允许 Tavily 搜索饥荒联机版灰机 Wiki 的插件
+display_name: 网页限定搜索
+desc: 仅允许 Tavily 允许在允许的域名进行搜索
 version: v1.0.0
 author: https://github.com/eenn1301/astrbot_plugin_dst_only

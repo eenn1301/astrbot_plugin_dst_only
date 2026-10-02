@@ -1,6 +1,7 @@
 name: astrbot_plugin_dst_only
 display_name: 网页限定搜索
 desc: 仅允许 Tavily 允许在允许的域名进行搜索
-version: v1.0.0
-author: https://github.com/eenn1301/astrbot_plugin_dst_only
+version: 1.0.0  # 去掉 v 前缀
+author: eenn1301  # 改为纯用户名
+repo: https://github.com/eenn1301/astrbot_plugin_dst_only
 short_desc: 固定域名搜索

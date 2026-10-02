@@ -1,105 +1,69 @@
-import aiohttp
 import json
-from astrbot.api.star import Context, Star, register
+import aiohttp
 from astrbot.api.event import filter, AstrMessageEvent
-from astrbot.api.provider import ProviderRequest
+from astrbot.api.star import Context, Star
+from astrbot.api import logger
 
 PLUGIN_NAME = "astrbot_plugin_dst_only"
 TAVILY_API_URL = "https://api.tavily.com/search"
 
 
-@register(PLUGIN_NAME, "你的名字", "仅允许 Tavily 搜索指定域名的插件", "1.0.0")
 class DSTOnlyPlugin(Star):
-    def __init__(self, context: Context):
+    def __init__(self, context: Context, config: dict):
         super().__init__(context)
-        self.config = context.get_config()
+        self.config = config
+        logger.info(
+            f"[{PLUGIN_NAME}] 插件已加载，白名单域名: "
+            f"{self.config.get('allowed_domains', [])}"
+        )
 
-    async def initialize(self):
-        """插件加载时读取配置，并将域名白名单注入到 LLM 请求中。"""
-        self.logger.info(f"[{PLUGIN_NAME}] 插件已加载，白名单域名: {self.config.get('allowed_domains', [])}")
-
-    # ------------------------------------------------------------------
-    # 方案 A：通过 OnLLMRequestEvent 拦截并修改内置工具的参数
-    # ------------------------------------------------------------------
-    @filter.on_llm_request()
-    async def modify_tavily_tool_params(self, event: AstrMessageEvent, req: ProviderRequest):
-        """
-        在 LLM 请求发送前，如果请求中包含 web_search_tavily 工具调用，
-        则自动追加 include_domains 和 include_domains_mode 参数。
-
-        OnLLMRequestEvent 在 ProviderRequest 被核心预填充之后、
-        发送给 LLM 提供者之前触发，可以安全地修改请求内容[reference:3]。
-        """
-        allowed_domains = self.config.get("allowed_domains", [])
-        include_mode = self.config.get("include_domains_mode", "restrict")
-
-        if not allowed_domains:
-            return
-
-        # 遍历所有消息，查找 assistant 的 tool_calls
-        for msg in req.messages:
-            if msg.get("role") != "assistant":
-                continue
-            tool_calls = msg.get("tool_calls")
-            if not tool_calls:
-                continue
-
-            for tool_call in tool_calls:
-                func = tool_call.get("function", {})
-                if func.get("name") != "web_search_tavily":
-                    continue
-
-                # 解析原有参数
-                try:
-                    args = json.loads(func.get("arguments", "{}"))
-                except json.JSONDecodeError:
-                    args = {}
-
-                # 注入域名白名单参数
-                args["include_domains"] = allowed_domains
-                args["include_domains_mode"] = include_mode
-
-                # 写回
-                func["arguments"] = json.dumps(args, ensure_ascii=False)
-                self.logger.info(
-                    f"[{PLUGIN_NAME}] 已注入 Tavily 域名限制: "
-                    f"domains={allowed_domains}, mode={include_mode}"
-                )
-
-    # ------------------------------------------------------------------
-    # 方案 B（备选）：注册一个自定义工具，完全替代内置搜索
-    # ------------------------------------------------------------------
     @filter.llm_tool(name="web_search_tavily")
-    async def custom_tavily_search(
+    async def search_with_domain_restriction(
         self,
         event: AstrMessageEvent,
         query: str,
         max_results: int = 5,
     ):
         """
-        自定义的 Tavily 搜索工具。该工具的名称与内置工具相同，
-        如果 AstrBot 允许插件工具覆盖内置工具，则会优先调用此版本。
-        如果内置工具优先，则方案 A 会生效。
+        使用 Tavily 进行联网搜索，自动限制为允许的域名范围。
+
+        Args:
+            query(string): 搜索关键词。
+            max_results(int): 返回结果数量，默认 5 条。
         """
-        allowed_domains = self.config.get("allowed_domains", [])
+        # 读取域名白名单，过滤空字符串
+        allowed_domains = [
+            d.strip()
+            for d in self.config.get("allowed_domains", [])
+            if d.strip()
+        ]
         include_mode = self.config.get("include_domains_mode", "restrict")
 
+        # 读取 Tavily API Key（从 AstrBot 全局配置中获取）
         tavily_keys = self.config.get("websearch_tavily_key", [])
         if not tavily_keys:
-            return {"error": "未配置 Tavily API Key"}
+            yield event.plain_result("未配置 Tavily API Key，无法执行搜索。")
+            return
 
-        api_key = tavily_keys[0]
+        api_key = tavily_keys[0] if isinstance(tavily_keys, list) else tavily_keys
 
+        # 构建请求体
         payload = {
             "api_key": api_key,
             "query": query,
             "max_results": max_results,
-            "include_domains": allowed_domains,
         }
 
-        # restrict 模式下 Tavily 要求必须设置 include_domains[reference:4]
-        if allowed_domains and include_mode == "restrict":
-            payload["include_domains_mode"] = "restrict"
+        # 注入域名限制参数
+        if allowed_domains:
+            payload["include_domains"] = allowed_domains
+            if include_mode == "restrict":
+                payload["include_domains_mode"] = "restrict"
+
+        logger.info(
+            f"[{PLUGIN_NAME}] Tavily 搜索: query='{query}', "
+            f"domains={allowed_domains}, mode={include_mode}"
+        )
 
         try:
             async with aiohttp.ClientSession() as session:
@@ -109,12 +73,43 @@ class DSTOnlyPlugin(Star):
                     timeout=aiohttp.ClientTimeout(total=30),
                 ) as resp:
                     if resp.status != 200:
-                        text = await resp.text()
-                        return {"error": f"Tavily API 返回 {resp.status}: {text}"}
+                        error_text = await resp.text()
+                        logger.error(
+                            f"[{PLUGIN_NAME}] Tavily API 返回 {resp.status}: "
+                            f"{error_text}"
+                        )
+                        yield event.plain_result(
+                            f"Tavily 搜索失败（HTTP {resp.status}），请检查 API Key 和配置。"
+                        )
+                        return
+
                     data = await resp.json()
-                    return data
+
         except Exception as e:
-            return {"error": f"Tavily 请求失败: {str(e)}"}
+            logger.error(f"[{PLUGIN_NAME}] Tavily 请求异常: {e}")
+            yield event.plain_result(f"Tavily 请求出错: {str(e)}")
+            return
+
+        # 格式化返回结果
+        results = data.get("results", [])
+        if not results:
+            yield event.plain_result(
+                f"未找到与「{query}」相关的结果（已限制域名: {allowed_domains}）。"
+            )
+            return
+
+        lines = [f"🔍 搜索「{query}」的结果（仅限指定域名）：\n"]
+        for i, r in enumerate(results, 1):
+            title = r.get("title", "无标题")
+            url = r.get("url", "")
+            snippet = r.get("snippet", "")
+            lines.append(f"**{i}. {title}**")
+            lines.append(f"   {url}")
+            if snippet:
+                lines.append(f"   {snippet[:200]}...")
+            lines.append("")
+
+        yield event.plain_result("\n".join(lines))
 
     async def terminate(self):
-        self.logger.info(f"[{PLUGIN_NAME}] 插件已卸载")
+        logger.info(f"[{PLUGIN_NAME}] 插件已卸载")
